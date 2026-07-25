@@ -1,0 +1,55 @@
+{
+  "premium_entry": [
+  "button:has-text(\"Buy Premium for a User\")",
+  "a:has-text(\"Buy Premium for a User\")",
+  "text=Buy Premium for a User",
+  ":text-is(\"Buy Premium for a User\")",
+  "button:has-text(\"Buy Telegram Premium\")",
+  "text=Buy Telegram Premium"
+  ],
+  "username": [
+    "input[name='username']",
+    "input[autocomplete='username']",
+    "input[placeholder*='username' i]",
+    "input[placeholder*='Telegram' i]",
+    "input[type='text']"
+  ],
+  "months": {
+    "3": [
+      "[data-months='3']",
+      "button:has-text('3 months')",
+      "[role='button']:has-text('3 months')",
+      "text=3 months"
+    ],
+    "6": [
+      "[data-months='6']",
+      "button:has-text('6 months')",
+      "[role='button']:has-text('6 months')",
+      "text=6 months"
+    ],
+    "12": [
+      "[data-months='12']",
+      "button:has-text('12 months')",
+      "[role='button']:has-text('12 months')",
+      "text=12 months"
+    ]
+  },
+  "continue": [
+    "button:has-text('Continue')",
+    "button:has-text('Next')",
+    "button:has-text('Buy')",
+    "button:has-text('继续')",
+    "button:has-text('下一步')",
+    "[data-testid='continue']"
+  ],
+  "login_required": [
+    "a[href*='/login']",
+    "button:has-text('Log in')",
+    "button:has-text('登录')"
+  ],
+  "logged_in": [
+    "a[href*='/account']",
+    "[data-testid='account-menu']",
+    ".tm-header-user"
+  ]
+}

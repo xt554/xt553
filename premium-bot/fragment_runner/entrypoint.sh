@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+uvicorn fragment_runner.health_app:app \
+  --host 0.0.0.0 \
+  --port 9100 \
+  --log-level warning &
+
+health_pid=$!
+
+trap 'kill "$health_pid" 2>/dev/null || true' EXIT INT TERM
+
+exec python -m fragment_runner.main
