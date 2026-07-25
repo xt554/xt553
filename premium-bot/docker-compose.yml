@@ -1,0 +1,222 @@
+name: premium-bot
+
+x-python-service: &python-service
+  build:
+    context: .
+    dockerfile: docker/python.Dockerfile
+  env_file:
+    - .env
+  restart: unless-stopped
+  networks:
+    - premium
+
+x-python-dependencies: &python-dependencies
+  mysql:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-premium_bot}
+      MYSQL_USER: ${MYSQL_USER:-premium}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-premium_dev_password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_dev_password}
+      TZ: UTC
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "127.0.0.1:${MYSQL_HOST_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    networks:
+      - premium
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - premium
+
+  migrate:
+    <<: *python-service
+    restart: "no"
+    depends_on: *python-dependencies
+    command: ["sh", "-c", "alembic upgrade head && python -m database.seed"]
+
+  api:
+    <<: *python-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command:
+      - uvicorn
+      - api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "${API_WORKERS:-2}"
+      - --proxy-headers
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - fragment_artifacts:/data/fragment-artifacts:ro
+
+  signer:
+    <<: *python-service
+    profiles: ["fragment"]
+    volumes:
+      - ./secrets/ton-wallets:/run/secrets/ton-wallets:ro
+    command:
+      - uvicorn
+      - signer.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --workers
+      - "1"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  fragment-runner:
+    build:
+      context: .
+      dockerfile: docker/fragment-runner.Dockerfile
+    profiles: ["fragment-runner"]
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - fragment_profiles:/data/profiles
+      - fragment_artifacts:/data/fragment-artifacts
+      - fragment_runtime:/data/fragment-runtime
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/health/live', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - premium
+
+  worker:
+    <<: *python-service
+    depends_on:
+      api:
+        condition: service_healthy
+    command:
+      - celery
+      - -A
+      - worker.celery_app:celery_app
+      - worker
+      - --loglevel=${LOG_LEVEL:-INFO}
+      - --queues=default,payments,fulfillment
+      - --concurrency=${CELERY_CONCURRENCY:-4}
+
+  beat:
+    <<: *python-service
+    depends_on:
+      api:
+        condition: service_healthy
+    command:
+      - celery
+      - -A
+      - worker.celery_app:celery_app
+      - beat
+      - --loglevel=${LOG_LEVEL:-INFO}
+
+  bot:
+    <<: *python-service
+    profiles: ["telegram"]
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["python", "-m", "bot.main"]
+
+  admin:
+    build:
+      context: admin
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - premium
+
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      admin:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/letsencrypt:ro
+      - certbot_webroot:/var/www/certbot:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health/live"]
+      interval: 15s
+      timeout: 3s
+      retries: 10
+    networks:
+      - premium
+
+  certbot:
+    image: certbot/certbot:latest
+    profiles: ["https"]
+    volumes:
+      - ./nginx/certs:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    networks:
+      - premium
+
+volumes:
+  mysql_data:
+  redis_data:
+  certbot_webroot:
+  fragment_profiles:
+  fragment_artifacts:
+  fragment_runtime:
+
+networks:
+  premium:
+    driver: bridge
